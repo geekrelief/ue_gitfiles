@@ -1,0 +1,93 @@
+#!/bin/bash
+#
+# This hook script detects changes on the specified remote ref and
+# unlocks own file locks that have been pushed/merged to the remote branch.
+#
+set -eu
+
+# Use a temp file unique to the user to avoid git config locking issues
+TEMP_STORE="/tmp/lfs_unlock_ref_$(id -u)"
+
+function main {
+    local state="$1"
+
+    while read -r old_value new_value ref_name
+    do
+        # Only track remote branches
+        if [[ "${ref_name}" != refs/remotes/* ]]; then
+            continue
+        fi
+
+        case "${state}" in
+            'prepared')
+                # Capture the current ref state before it changes
+                git rev-parse "${ref_name}" > "$TEMP_STORE" 2>/dev/null || echo "0000000000000000000000000000000000000000" > "$TEMP_STORE"
+                ;;
+            'committed')
+                if [ -f "$TEMP_STORE" ]; then
+                    old_value=$(cat "$TEMP_STORE")
+                    rm -f "$TEMP_STORE"
+                fi
+
+                if is_remote_default_branch "${ref_name}"; then
+                    process_unlocks "${old_value}" "${new_value}"
+                fi
+                ;;
+        esac
+    done
+}
+
+function is_remote_default_branch {
+    local ref_name="$1"
+    local remote_name
+    remote_name=$(echo "${ref_name}" | cut -d'/' -f3)
+
+    # Try to get the symbolic head locally.
+    # If this fails, you may need to run 'git remote set-head <remote> -a' once manually.
+    local default_ref
+    default_ref=$(git rev-parse --symbolic-full-name "${remote_name}/HEAD" 2>/dev/null || echo "")
+
+    [[ "${ref_name}" == "${default_ref}" ]]
+}
+
+function process_unlocks {
+    local old_ref="$1"
+    local new_ref="$2"
+
+    # 1. Get files currently locked by you
+    local locked_files
+    locked_files=$(git lfs locks --local | awk -v FS='\t' '{ print gensub(/ *$/, "", 1, $1) }')
+
+    # 2. Get files changed in this push
+    local changed_files
+    changed_files=$(git diff --name-only "${old_ref}" "${new_ref}" 2>/dev/null || echo "")
+
+    # 3. Get currently dirty files (uncommitted)
+    local dirty_files
+    dirty_files=$(git status --porcelain=v1 | awk -F '"' '{print (NF>1 ? $2 : $0)}' | awk '{print substr($0,4)}')
+
+    # Find intersection of Locked and Changed (files to potentially unlock)
+    local committed_locked_files
+    committed_locked_files=$(comm -12 <(echo "$locked_files" | sort) <(echo "$changed_files" | sort))
+
+    if [[ -n "$committed_locked_files" ]]; then
+        # Unlock files that are committed and NOT dirty
+        echo "$committed_locked_files" | comm -23 - <(echo "$dirty_files" | sort) | xargs -r -n 1 git lfs unlock
+
+        # Report files that are committed but still dirty
+        local still_dirty
+        still_dirty=$(echo "$committed_locked_files" | comm -12 - <(echo "$dirty_files" | sort))
+        if [[ -n "$still_dirty" ]]; then
+            echo "$still_dirty" | report_dirty_files
+        fi
+    fi
+}
+
+function report_dirty_files {
+    echo "*** Skip unlocking due to following files having uncommitted changes: ***"
+    while read -r line; do
+        echo " * $line"
+    done
+}
+
+main "$@"
