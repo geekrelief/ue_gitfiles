@@ -25,12 +25,12 @@ set "INDIGO=!ESC![38;5;63m"
 set "VIOLET=!ESC![95m"
 set "RESET=!ESC![0m"
 
-:: Check if the directory exists
-if exist "%FolderName%\" (
-    echo !VIOLET! [ERROR] Specified folder for local repo exists:!RESET!
+:: Check if the directory does not exist
+if not exist "%FolderName%\" (
+    echo !VIOLET! [ERROR] Specified folder for local repo doesn't exist:!RESET!
     echo !YELLOW! %FolderName%!RESET!
     echo.
-    echo Please choose another folder or remove the existing one and try again.
+    echo Please choose another folder and try again.
     pause
     exit /b 1
 )
@@ -45,44 +45,64 @@ echo !CYAN!Azure repo found at %AzureRepoURL% continuing setup...!RESET!
 
 cd %FolderName%
 
-echo !CYAN!Initializing Git repository and setting up Git LFS...!RESET!
-git init
-cp %UETOOLS_DIR%/.gitignore %FolderName%
-cp %UETOOLS_DIR%/.gitattributes %FolderName%
-cp %UETOOLS_DIR%/reference-transaction %FolderName%/.git/hooks/
+echo !CYAN!Checking Git repository and setting up Git LFS...!RESET!
+if not exist "%FolderName%\.git" (
+    echo !CYAN!Creating new Git repository...!RESET!
+    git init
+) else (
+    echo !YELLOW!Found git repository already exists in %FolderName% !RESET!
+)
+copy %UETOOLS_DIR%/.gitignore %FolderName%
+copy %UETOOLS_DIR%/.gitattributes %FolderName%
+copy %UETOOLS_DIR%/UnlockGitLfsLocks.ps1 %FolderName%
+copy %UETOOLS_DIR%/reference-transaction %FolderName%/.git/hooks/
 
 git lfs install
-git config lfs.%AzureRepositoryURL%.git/info/lfs.locksverify true
 
 echo !CYAN!Adding files to Git LFS tracking...!RESET!
 git add .
-git commit -m "Initial commit - Setup Git LFS"
+git commit -m "Setup repo for Git LFS"
 
 :: to fix a bug with Azure and HTTP/2
 git config http.version HTTP/1.1
 
 git remote add origin "%AzureRepoURL%"
 git push -u origin main
+:: Enable Git LFS lock verification
+echo !CYAN!Enabling Git LFS lock verification...!RESET!
+git config lfs.%AzureRepositoryURL%.git/info/lfs.locksverify true
 
 echo !GREEN!Git LFS setup complete and initial commit pushed to %AzureRepoURL%!RESET!
 
 echo !YELLOW!
-echo Add the following to Config/DefaultEditorPerProjectUserSettings.ini
+echo Updating Config/DefaultEditorPerProjectUserSettings.ini
+(
+echo.
+echo.
+echo ; Git lfs settings
+echo [/Script/UnrealEd.EditorLoadingSavingSettings]
+echo bSCCAutoAddNewFiles=False
+echo bAutomaticallyCheckoutOnAssetModification=True
+echo bPromptForCheckoutOnAssetModification=False
+echo bAutoloadCheckedOutPackages=True
+echo.
+) >> ".\Config\DefaultEditorPerProjectUserSettings.ini"
 
-echo !BLUE!
-echo "[/Script/UnrealEd.EditorLoadingSavingSettings]"
-echo "bSCCAutoAddNewFiles=False"
-echo "bAutomaticallyCheckoutOnAssetModification=True"
-echo "bPromptForCheckoutOnAssetModification=False"
-echo "bAutoloadCheckedOutPackages=True"
+echo Updating Config/DefaultEngine.ini
+(
+echo.
+echo.
+echo ; Git lfs settings
+echo [SystemSettingsEditor]
+echo r.Editor.SkipSourceControlCheckForEditablePackages=1
+echo.
+) >> ".\Config\DefaultEngine.ini"
 
-echo !YELLOW!
-echo Add the following to Config/DefaultEngine.ini
-
-echo !BLUE!
-echo "[SystemSettingsEditor]"
-echo "r.Editor.SkipSourceControlCheckForEditablePackages=1"
+echo !GREEN!
+echo Configuration files updated successfully. 
+echo Git LFS setup complete.
 echo !RESET!
+exit /b 0
 
 :usage
 echo ====================================================
