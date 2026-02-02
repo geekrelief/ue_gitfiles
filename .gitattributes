@@ -28,3 +28,6 @@
 *.icns lfs
 # Movies
 *.bk2 lfs
+
+# Affinity Designer
+*.afdesign lfs
